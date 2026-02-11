@@ -1,13 +1,24 @@
+# test_working.py
 from sirraya_api import create_sirraya_api
+import numpy as np
 
-# Initialize system
+# Initialize with force face detection
 system = create_sirraya_api()
+system.config['force_face_detection'] = True
 
-# Analyze single frame
+# Create frame
+frame = np.zeros((480, 640, 3), dtype=np.uint8)
+
+# Analyze
 result = system.analyze_frame(frame)
-sis_score = result['result']['sirraya_integrity_score']
-sis_category = result['result']['sis_category']
 
-# Analyze video
-video_report = system.analyze_video('path/to/video.mp4')
-avg_sis = video_report['aggregated_sis']['video_sirraya_integrity_score']
+# Print simple output
+print(f"SIS Score: {result['result']['sirraya_integrity_score']}")
+print(f"Verdict: {result['result']['sis_verdict']}")
+print(f"Category: {result['result']['sis_category']}")
+
+# Print if face was detected
+if 'error' in result['metadata']:
+    print(f"Error: {result['metadata']['error']}")
+else:
+    print("✅ Face detected successfully")

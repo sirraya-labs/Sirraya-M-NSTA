@@ -33,6 +33,21 @@ import base64
 from enum import Enum
 import csv
 
+
+# Add this after the imports in sirraya_core.py
+class NumpyEncoder(json.JSONEncoder):
+    """Custom JSON encoder for NumPy types"""
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, np.bool_):
+            return bool(obj)
+        return super().default(obj)
+
 # ============================================================================
 # LOGGING CONFIGURATION
 # ============================================================================

@@ -1,0 +1,30 @@
+{
+  "metadata": {
+    "system": "Sirraya Enterprise v3.2.0",
+    "standard": "SIS-2026",
+    "timestamp": "2026-02-11T14:04:37.335864Z",
+    "version": "3.2.0",
+    "error": "No face detected"
+  },
+  "result": {
+    "sirraya_integrity_score": 0.0,
+    "sis_category": "\ud83d\udd34 CRITICAL FAILURE DETECTED",
+    "sis_verdict": "ANALYSIS_ERROR",
+    "forensic_confidence": 0.0,
+    "requires_human_review": true,
+    "interpretation": "Critical failure - biophysical or structural impossibility detected",
+    "recommended_action": "IMMEDIATE_SECURITY_INTERVENTION"
+  },
+  "verification_details": {
+    "layers": {
+      "error": {
+        "message": "No face detected"
+      }
+    },
+    "environmental": {
+      "lighting": {
+        "brightness": 0.670077205882353,
+        "contrast": 0.12392408278985606,
+        "condition": "OPTIMAL",
+        "score": 1.0,
+        "rppg_possible": 
