@@ -1,250 +1,93 @@
-# M-NSTA: Multi-Modal Neural-Spatial-Temporal Analysis
+# Face Video Authenticity Pipeline
 
-### The Forensic Backbone for Digital Truth | A Sirraya Labs Open-Source Initiative
+A face-video analysis pipeline that combines a small set of published, reproducible signals into a manipulation-probability estimate with an explicit confidence score. It does not produce a verdict and is not a forensic tool.
 
-**M-NSTA** is a comprehensive forensic framework designed to detect sophisticated synthetic media by validating the immutable physical and geometric properties of the human subject. Developed at **Sirraya Labs**, M-NSTA moves beyond surface-level pixel analysis, anchoring authenticity in the **"Structural Truth"** of a scene.
+## What it does
 
----
+Given a sequence of face-cropped video frames (and optionally per-frame facial landmarks), the pipeline computes four independent signals and fuses them into a single probability with an associated confidence level. Each signal is computed only when the input data supports it; signals that cannot be computed are marked unavailable and excluded from the fusion rather than defaulted to a neutral value.
 
-## 🔬 Scientific Methodology
+## Components
 
-M-NSTA operates on the principle of **Multi-Modal Verification**. To pass a Sirraya integrity check, a video must prove its authenticity across three distinct scientific dimensions:
+### Capture quality gating (`CaptureQuality`)
+Assesses lighting and motion blur from raw frames. Used to determine whether downstream signal extraction (particularly pulse estimation) is likely to be reliable.
 
-### 1. Neural Layer: Quantum-Inspired Manifolds
+- `assess_lighting`: brightness and contrast from grayscale frame statistics.
+- `assess_motion`: Laplacian variance across recent frames as a blur indicator.
 
-Traditional CNN-based detection is vulnerable to adversarial perturbations. M-NSTA utilizes **Density Matrix Formalism** to model facial landmarks as entangled states.
+### Remote photoplethysmography (`POSRppg`)
+Extracts a pulse signal from facial skin color variation using the POS (Plane-Orthogonal-to-Skin) algorithm (Wang, den Brinker, Stuijk, de Haan, IEEE TBME 2017). Reports heart rate, signal-to-noise ratio, and whether the estimated rate falls in a physiologically plausible range (40-180 bpm).
 
-* **Approach:** Analyzes the global semantic manifold of the face.
-* **Detection:** Identifies high-dimensional correlation breaks that occur when AI generative models "hallucinate" micro-expressions or facial symmetry.
+This is necessary-but-not-sufficient evidence of a real, well-lit face. A clean pulse signal does not by itself confirm authenticity, and absence of one (commonly due to poor lighting or motion) is not treated as evidence of manipulation.
 
-### 2. Spatial Layer: 3D Geometric Integrity
+### Spectral artifact detection (`SpectralArtifactDetector`)
+Computes the 2D power spectrum of a face crop, azimuthally averages it into radial frequency bins, and measures the ratio of high-frequency to low-frequency energy. Generative upsampling architectures tend to leave a measurable bump in this ratio (Durall, Keuper, Keuper, CVPR 2020; Zhang, Karaman, Chang, WIFS 2019). Returns a continuous anomaly score rather than a binary classification.
 
-Synthetic overlays often fail to maintain perfect 3D structural consistency when the subject moves through space.
+Compression and upscaling of genuine footage can also elevate this ratio. The signal is reported as supportive, not conclusive.
 
-* **Approach:** Projects 2D landmarks into a rigid 3D spatial matrix.
-* **Detection:** Uses **Procrustes Analysis** to detect "Z-axis warping." If the distance between fixed cranial points fluctuates during head rotation, the system flags a "Spatial Violation."
+### Blink rate monitoring (`BlinkRateMonitor`)
+Tracks eye aspect ratio (EAR) across frames (Soukupova & Cech, CVWW 2016) and counts blink events. Compares the resulting blink rate to a typical resting range (12-20 per minute), motivated by early findings that face-swap deepfakes under-blinked relative to natural human rates (Li, Chang, Lyu, WIFS 2018).
 
-### 3. Temporal Layer: Biophysical Photoplethysmography (rPPG)
+This signal has degraded in discriminative value over time as generative pipelines have specifically addressed it. A normal blink rate is not evidence of authenticity; an abnormal rate is weak corroborating evidence at most.
 
-The most difficult element for AI to simulate is the human cardiovascular system.
+### Landmark temporal consistency (`LandmarkTemporalConsistency`)
+Tracks frame-to-frame displacement of a fixed set of stable facial landmarks (nose bridge, forehead, chin region) and computes normalized jitter relative to the clip's own running statistics. This is self-referential: it does not compare against an external reference frame or assume any single frame represents ground-truth geometry.
 
-* **Approach:** Uses **Independent Component Analysis (ICA)** to extract micro-color variations in the skin's green channel caused by blood flow.
-* **Detection:** Validates the presence of a rhythmic, biological heartbeat. No pulse = No authenticity.
+Both unusually high jitter (erratic motion) and unusually low jitter (suspiciously smooth motion) are scored as mild evidence.
 
----
+### Fusion (`AuthenticityEstimator`)
+Combines all available signals into a single `manipulation_probability` (0-1) using fixed, documented weights:
 
-## ⚙️ System Architecture: How M-NSTA Works
+| Signal | Weight |
+|---|---|
+| Spectral artifact | 0.40 |
+| Landmark jitter | 0.25 |
+| Blink rate | 0.15 |
+| rPPG plausibility | 0.20 |
 
-### End-to-End Forensic Pipeline
+Unavailable signals are excluded from both the weighted sum and the weight denominator, so the probability is always computed only from evidence that actually exists. A separate `confidence` score reflects how much of the total possible evidence weight was actually available, independent of the probability value itself.
 
-```
-[Video Input] → [Environmental Calibration] → [Multi-Modal Analysis] → [SIS Scoring] → [Forensic Verdict]
-```
+These weights are documented starting points based on the cited literature, not coefficients fit to labeled data. They should be validated and recalibrated against a labeled benchmark (e.g. FaceForensics++, DFDC, Celeb-DF) before any production use.
 
-### Step-by-Step Operational Flow
+### Output (`AuthenticityAssessment`)
+JSON-serializable result containing:
 
-#### **Phase 1: Environmental Pre-Assessment**
-Before any analysis begins, M-NSTA determines **if conditions are suitable for reliable detection**:
+- `manipulation_probability`: 0-1 estimate, higher means more evidence of manipulation.
+- `confidence`: 0-1, how much usable evidence was available.
+- `evidence`: per-signal breakdown with availability, score, raw detail, and caveats.
+- `content_sha256`: a content hash of the processed frames, for audit and reproducibility purposes. This is a plain digest, not a blockchain record.
+- `human_review_recommended`: true when confidence is low or the probability falls in an ambiguous band (0.35-0.65).
+- `disclaimer`: explicit statement that this is a statistical estimate from weak-to-moderate signals, not a forensic determination, and should not be sole grounds for action against a person.
 
-| Assessment | Method | Outcome |
-|------------|--------|---------|
-| **Lighting Analysis** | Normalized brightness & contrast calculation | Determines if rPPG is possible |
-| **Motion Detection** | Laplacian variance across consecutive frames | Flags excessive blur that compromises spatial analysis |
-| **SNR Calculation** | Frequency domain signal-to-noise ratio | Confirms sufficient signal quality for biophysical extraction |
+## Orchestration (`FaceVideoAuthenticityPipeline`)
 
-*If environmental conditions are insufficient, the system issues explicit warnings and calibrates confidence scores accordingly.*
+Minimal wiring class. Call `process_frame(face_crop_bgr, landmarks_xy)` per frame, then `finalize()` to get the `AuthenticityAssessment`. The pipeline does not include a face detector or landmarker; callers must supply face-cropped frames and, where available, landmark arrays (expected shape `(478, 2)`, compatible with MediaPipe FaceMesh indexing).
 
----
+## Requirements
 
-#### **Phase 2: Facial Topography Mapping**
-Using high-density 3D facial landmark detection (478-point mesh):
+- numpy
+- opencv-python (`cv2`)
+- scipy
 
-1. **Landmark Extraction** - Every face is mapped to a standardized coordinate system
-2. **Cranial Reference Points** - 11 anatomically fixed bone structures are identified (zygomatic, mandibular, frontal)
-3. **Depth Estimation** - Z-axis coordinates are inferred from 2D projections
+## Usage
 
-*This creates a **Structural Fingerprint** unique to the subject's skull geometry.*
+```python
+from face_video_authenticity import FaceVideoAuthenticityPipeline
 
----
+pipeline = FaceVideoAuthenticityPipeline(fps=30.0)
 
-#### **Phase 3: Parallel Forensic Analysis**
+for face_crop_bgr, landmarks_xy in frames:
+    pipeline.process_frame(face_crop_bgr, landmarks_xy)
 
-**🔷 SPATIAL VERIFICATION PATHWAY**
-```
-Landmarks → Distance Matrix Computation → Procrustes Analysis → Rigidity Score
-```
-
-1. Compute pairwise Euclidean distances between all fixed cranial landmarks
-2. Compare against baseline/reference structure
-3. Calculate deviation magnitude and statistical significance
-4. **Threshold:** >1.5% fluctuation = Geometric Violation
-
-**🔷 TEMPORAL VERIFICATION PATHWAY**
-```
-RGB Stream → Skin ROI Selection → ICA Decomposition → Heart Rate Extraction
+result = pipeline.finalize()
+print(result.to_json())
 ```
 
-1. Isolate facial region of interest (center 1/3 of frame)
-2. Extract RGB channel means over 10-second sliding window
-3. Apply Independent Component Analysis to separate blood volume pulse
-4. Bandpass filter (0.8-3.0 Hz = 48-180 BPM)
-5. Identify dominant frequency component
-6. **Threshold:** No discernible peak in physiological range = Biophysical Failure
+Running the module directly (`python face_video_authenticity.py`) executes a smoke test against synthetic frames and prints the resulting JSON.
 
-**🔷 NEURAL VERIFICATION PATHWAY**
-```
-Landmark Sequence → Density Matrix Projection → Entanglement Entropy → Authenticity Score
-```
+## Limitations
 
-1. Convert landmark coordinates to quantum state representations
-2. Calculate von Neumann entropy of the facial manifold
-3. Detect anomalous correlation structures characteristic of generative models
-4. **Threshold:** Entropy deviation >2σ from human baseline = Neural Anomaly
-
----
-
-#### **Phase 4: NeRF-Specific Countermeasure**
-
-M-NSTA contains specialized detection for **Neural Radiance Field-based head swaps** - the current state-of-the-art in deepfake generation:
-
-| Anomaly Type | Detection Method | Indicator |
-|--------------|------------------|-----------|
-| **Perfect View Consistency** | Multi-frame specular highlight tracking | Unnatural preservation of highlights across viewpoints |
-| **Shadow Coherence Failure** | Lighting direction estimation vs. shadow geometry | Inconsistent shadow physics |
-| **Volumetric Rendering Artifacts** | Edge gradient analysis in occluded regions | Soft, "fog-like" boundaries at hair/skin transitions |
-
-*These three indicators collectively form the **NeRF Confidence Score**.*
-
----
-
-#### **Phase 5: Sirraya Integrity Score (SIS) Calculation**
-
-All forensic signals are normalized and fused into a **single, standardized trust metric**:
-
-```
-SIS = Σ(Layer_Weight × Layer_Score) × Environmental_Calibration
-```
-
-| Layer | Weight | Inputs |
-|-------|--------|--------|
-| **Structural Matrix** | 35% | Rigidity Score + Symmetry Score + NeRF Detection |
-| **Quantum Neural** | 25% | Entanglement Entropy + Manifold Coherence |
-| **Biophysical** | 20% | Heart Rate Confidence + SNR |
-| **Temporal** | 10% | Motion Jerk + Expression Timing |
-| **GAN Artifacts** | 10% | Frequency Domain Anomalies + Grid Patterns |
-
-**Environmental Calibration Factors:**
-- Optimal Conditions: 1.0x (full confidence)
-- Suboptimal Lighting: 0.9x (moderate penalty)
-- Poor/Pulse Impossible: 0.7x (significant penalty)
-
----
-
-#### **Phase 6: Deterministic Authentication**
-
-The system achieves **maximum confidence** only when:
-
-✅ **Structural Matrix Integrity** ≥ 0.85 AND  
-✅ **Biophysical Verification** = AVAILABLE with SNR ≥ 3.0 AND  
-✅ **Heart Rate** = 40-180 BPM (physiologically plausible)
-
-*This "dual-key" verification cannot be bypassed by improving GAN quality alone - the attacker would need to simultaneously simulate bone rigidity and cardiovascular activity with perfect physical accuracy.*
-
----
-
-#### **Phase 7: Verdict Generation & Standardization**
-
-Every analysis produces a **SIS Payload** - a standardized forensic report:
-
-```json
-{
-  "sirraya_integrity_score": 94.7,
-  "sis_category": "DETERMINISTIC_AUTHENTICATION",
-  "sis_verdict": "DETERMINISTICALLY_AUTHENTIC",
-  "forensic_confidence": 0.98,
-  "requires_human_review": false,
-  "verification_layers": {
-    "structural_matrix_integrity": {
-      "score": 0.92,
-      "rigidity_score": 0.94,
-      "symmetry_score": 0.89,
-      "nerf_detected": false
-    },
-    "biophysical_verification": {
-      "available": true,
-      "heart_rate": 72.3,
-      "confidence": 0.87,
-      "snr": 4.2
-    }
-  },
-  "environmental_conditions": {
-    "lighting_condition": "OPTIMAL",
-    "motion_condition": "STABLE"
-  }
-}
-```
-
----
-
-## 🔄 Continuous Learning & Adaptation
-
-M-NSTA employs **temporal baseline adaptation**:
-
-1. First 30 frames establish individual biometric baseline
-2. Subsequent frames measure deviation, not absolute values
-3. Statistical process control detects when measurements exceed 3σ thresholds
-
-*This prevents false positives on subjects with unique anatomical variations.*
-
----
-
-## 🧪 Benchmarking & Validation
-
-The system includes a dedicated **NeRF Benchmark Suite** that:
-
-1. Processes controlled datasets of authentic videos
-2. Processes controlled datasets of synthetic videos
-3. Calculates detection rates, false positive rates, and AUC-ROC
-4. Generates comprehensive validation reports
-
-*All Sirraya Labs benchmarks are conducted under ISO/IEC 30107-3 presentation attack detection standards.*
-
----
-
-## 🛡 AI Safety & Morality Mission
-
-As the Principal Investigator of Sirraya Labs, I have launched this project as a **Fully Open-Source** endeavor. In 2026, the ability to distinguish reality from simulation is a fundamental human necessity.
-
-**We invite researchers to join our "Morality First" mission:**
-
-* **Adversarial Red-Teaming:** Help us find the breaking points of our Spatial Matrix.
-* **Demographic Parity:** Contribute to our datasets to ensure rPPG accuracy across all ethnicities and lighting conditions.
-* **Ethical Governance:** Collaborate on the integration of **UDNA (Universal Digital Network Architecture)** to ensure forensic results are decentralized and tamper-proof.
-
----
-
-## 📊 Performance Characteristics
-
-| Metric | Value | Condition |
-|--------|-------|-----------|
-| **SIS Score Accuracy** | ±2.3 points | 95% confidence interval |
-| **rPPG Availability** | 94% | Optimal lighting |
-| **rPPG Availability** | 67% | Low light |
-| **SMI False Positive Rate** | 0.8% | Authentic videos |
-| **NeRF Detection Rate** | 91.2% | Benchmark v3.0 |
-| **Processing Speed** | 12-15 FPS | CPU-only |
-| **Processing Speed** | 45-60 FPS | GPU-accelerated |
-
----
-
-## 🔗 Integration Options
-
-- **REST API** - JSON-over-HTTP with SIS payloads
-- **Python SDK** - Direct embedding in forensic workflows
-- **Docker Container** - Isolated deployment with hardware acceleration
-- **Blockchain Anchoring** - Optional hash commitment to public ledger
-
----
-
-*M-NSTA: Because truth should be mathematically verifiable.*  
-**Sirraya Labs — 2026**
+- Not validated against any labeled deepfake dataset. Fusion weights are not calibrated coefficients.
+- Blink-rate and rPPG signals are weak and can be defeated or rendered uninformative by current generative methods.
+- The spectral artifact detector responds to any high-frequency anomaly, including compression and upscaling artifacts unrelated to manipulation.
+- No face detection, landmark extraction, or temporal alignment is provided; output quality depends entirely on the quality of inputs supplied by the caller.
+- Designed for triage and prioritization, not as a sole basis for decisions affecting individuals.
